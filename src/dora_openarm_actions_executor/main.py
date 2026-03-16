@@ -150,8 +150,8 @@ async def _main_executor(node, events, arms, use_upsample, use_filter, control_h
     upsampler = None
     lowpass = None
     dynamic_chunk_hz = None
-    TARGET_INTERVAL_NS = None
-    TARGET_INTERVAL_S = None
+    target_interval_ns = None
+    target_interval_s = None
     t_eval = None
 
     while True:
@@ -172,10 +172,10 @@ async def _main_executor(node, events, arms, use_upsample, use_filter, control_h
                 chunk_hz=dynamic_chunk_hz, horizon_sec=horizon_sec
             )
 
-            TARGET_INTERVAL_S = 1.0 / float(control_hz)
-            TARGET_INTERVAL_NS = int(TARGET_INTERVAL_S * 1e9)
+            target_interval_s = 1.0 / float(control_hz)
+            target_interval_ns = int(target_interval_s * 1e9)
 
-            t_eval = np.arange(0.0, horizon_sec + 1e-9, TARGET_INTERVAL_S)
+            t_eval = np.arange(0.0, horizon_sec + 1e-9, target_interval_s)
 
             if use_filter:
                 lowpass = BiquadLowpass(fs=control_hz, fc=cutoff)
@@ -189,8 +189,8 @@ async def _main_executor(node, events, arms, use_upsample, use_filter, control_h
         # Conditionally upsample
         if use_upsample:
             loop_positions = upsampler.upsample(positions, t_eval)
-            step_interval_ns = TARGET_INTERVAL_NS
-            step_interval_s = TARGET_INTERVAL_S
+            step_interval_ns = target_interval_ns
+            step_interval_s = target_interval_s
         else:
             loop_positions = positions
             step_interval_ns = interval
