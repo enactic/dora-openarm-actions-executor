@@ -131,7 +131,7 @@ class BiquadLowpass:
         return y.astype(np.float32)
 
 
-async def _main_executor(node, events, arms, use_upsample, filter_on, control_hz):
+async def _main_executor(node, events, arms, use_upsample, use_filter, control_hz):
     def blend(canceled_positions, next_positions):
         n = len(canceled_positions)
         overlapped_positions = next_positions[:n]
@@ -139,11 +139,11 @@ async def _main_executor(node, events, arms, use_upsample, filter_on, control_hz
         blended = canceled_positions * weights + overlapped_positions * (1 - weights)
         return blended, n
 
-    if not use_upsample and filter_on:
+    if not use_upsample and use_filter:
         print(
-            "Warning: upsample is False, but filter_on is True. Forcing filter_on to False."
+            "Warning: upsample is False, but filter is True. Forcing filter to False."
         )
-        filter_on = False
+        use_filter = False
 
     canceled_positions = None
 
@@ -177,7 +177,7 @@ async def _main_executor(node, events, arms, use_upsample, filter_on, control_hz
 
             t_eval = np.arange(0.0, horizon_sec + 1e-9, TARGET_INTERVAL_S)
 
-            if filter_on:
+            if use_filter:
                 lowpass = BiquadLowpass(fs=control_hz, fc=cutoff)
 
         # blend trajectory
@@ -201,7 +201,7 @@ async def _main_executor(node, events, arms, use_upsample, filter_on, control_hz
 
         for i_step, position in enumerate(loop_positions):
             # Conditionally apply low-pass filter
-            if filter_on and lowpass is not None:
+            if use_filter and lowpass is not None:
                 position = lowpass.step(position)
 
             next_base_time = base_time + step_interval_ns
@@ -283,11 +283,11 @@ async def _main_dora(node, events, executor_task):
     executor_task.cancel()
 
 
-async def _main_async(arms, use_upsample, filter_on, control_hz):
+async def _main_async(arms, use_upsample, use_filter, control_hz):
     node = dora.Node()
     events = asyncio.Queue()
     executor_task = asyncio.create_task(
-        _main_executor(node, events, arms, use_upsample, filter_on, control_hz)
+        _main_executor(node, events, arms, use_upsample, use_filter, control_hz)
     )
     dora_task = asyncio.create_task(_main_dora(node, events, executor_task))
 
@@ -313,7 +313,7 @@ def main():
         help="Whether to upsample the actions",
     )
     parser.add_argument(
-        "--filter-on",
+        "--filter",
         action="store_true",
         help="Whether to apply low-pass filter to the upsampled actions (only works if `upsample` is set)",
     )
@@ -331,7 +331,7 @@ def main():
         _main_async(
             arms,
             use_upsample=args.upsample,
-            filter_on=args.filter_on,
+            use_filter=args.filter,
             control_hz=args.control_hz,
         )
     )
