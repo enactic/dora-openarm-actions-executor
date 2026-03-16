@@ -131,7 +131,7 @@ class BiquadLowpass:
         return y.astype(np.float32)
 
 
-async def _main_executor(node, events, arms, upsample_on, filter_on, control_hz):
+async def _main_executor(node, events, arms, use_upsample, filter_on, control_hz):
     def blend(canceled_positions, next_positions):
         n = len(canceled_positions)
         overlapped_positions = next_positions[:n]
@@ -139,9 +139,9 @@ async def _main_executor(node, events, arms, upsample_on, filter_on, control_hz)
         blended = canceled_positions * weights + overlapped_positions * (1 - weights)
         return blended, n
 
-    if not upsample_on and filter_on:
+    if not use_upsample and filter_on:
         print(
-            "Warning: upsample_on is False, but filter_on is True. Forcing filter_on to False."
+            "Warning: upsample is False, but filter_on is True. Forcing filter_on to False."
         )
         filter_on = False
 
@@ -164,7 +164,7 @@ async def _main_executor(node, events, arms, upsample_on, filter_on, control_hz)
         positions = event["value"].values.to_numpy().reshape(n_positions, pos_shape)
 
         # Initialize upsampler and low-pass filter if needed
-        if upsample_on and upsampler is None:
+        if use_upsample and upsampler is None:
             dynamic_chunk_hz = 1e9 / interval
             horizon_sec = (n_positions - 1) / dynamic_chunk_hz
 
@@ -187,7 +187,7 @@ async def _main_executor(node, events, arms, upsample_on, filter_on, control_hz)
             canceled_positions = None
 
         # Conditionally upsample
-        if upsample_on:
+        if use_upsample:
             loop_positions = upsampler.upsample(positions, t_eval)
             step_interval_ns = TARGET_INTERVAL_NS
             step_interval_s = TARGET_INTERVAL_S
@@ -214,7 +214,7 @@ async def _main_executor(node, events, arms, upsample_on, filter_on, control_hz)
 
             # If there is a new event, cancel the current event.
             if not events.empty():
-                if upsample_on:
+                if use_upsample:
                     consumed_time_s = i_step * step_interval_s
                     consumed_raw_steps = int(consumed_time_s * dynamic_chunk_hz)
                 else:
@@ -283,11 +283,11 @@ async def _main_dora(node, events, executor_task):
     executor_task.cancel()
 
 
-async def _main_async(arms, upsample_on, filter_on, control_hz):
+async def _main_async(arms, use_upsample, filter_on, control_hz):
     node = dora.Node()
     events = asyncio.Queue()
     executor_task = asyncio.create_task(
-        _main_executor(node, events, arms, upsample_on, filter_on, control_hz)
+        _main_executor(node, events, arms, use_upsample, filter_on, control_hz)
     )
     dora_task = asyncio.create_task(_main_dora(node, events, executor_task))
 
@@ -308,14 +308,14 @@ def main():
         type=str,
     )
     parser.add_argument(
-        "--upsample-on",
+        "--upsample",
         action="store_true",
         help="Whether to upsample the actions",
     )
     parser.add_argument(
         "--filter-on",
         action="store_true",
-        help="Whether to apply low-pass filter to the upsampled actions (only works if upsample_on is set)",
+        help="Whether to apply low-pass filter to the upsampled actions (only works if `upsample` is set)",
     )
     parser.add_argument(
         "--control-hz",
@@ -330,7 +330,7 @@ def main():
     asyncio.run(
         _main_async(
             arms,
-            upsample_on=args.upsample_on,
+            use_upsample=args.upsample,
             filter_on=args.filter_on,
             control_hz=args.control_hz,
         )
