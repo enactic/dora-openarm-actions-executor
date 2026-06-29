@@ -161,6 +161,7 @@ async def _main_executor(node, events, arms, use_upsample, use_filter, control_h
         cutoff = event["metadata"].get("cutoff_hz", 15)
         n_positions = len(event["value"])
         pos_shape = len(event["value"][0])
+        reset = event["metadata"].get("reset", False)
         positions = event["value"].values.to_numpy().reshape(n_positions, pos_shape)
 
         # Initialize upsampler and low-pass filter if needed
@@ -179,6 +180,18 @@ async def _main_executor(node, events, arms, use_upsample, use_filter, control_h
 
             if use_filter:
                 lowpass = BiquadLowpass(fs=control_hz, fc=cutoff)
+
+        # On a reset, these actions are the first of a new episode, so drop any
+        # trajectory carried over from the previous one instead of blending it.
+        if reset:
+            print("Resetting trajectory, discarding any previous trajectory.")
+            canceled_positions = None
+            # Also re-initialize the low-pass filter to the new episode's first
+            # pose. Otherwise its retained state pulls the first samples toward
+            # the previous episode's final pose, causing a jerk/ramp at start.
+            # positions[0] equals the first upsampled sample (Hermite at t=0).
+            if lowpass is not None:
+                lowpass.reset_state(positions[0])
 
         # blend trajectory
         if canceled_positions is not None:
