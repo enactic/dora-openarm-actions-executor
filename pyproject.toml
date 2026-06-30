@@ -14,7 +14,7 @@
 
 [project]
 name = "dora-openarm-actions-executor"
-version = "1.0.0"
+version = "1.1.0"
 authors = [{ name = "Enactic, Inc."  }]
 description = "Dora node to execute timestamped actions"
 license = { text = "Apache-2.0" }
