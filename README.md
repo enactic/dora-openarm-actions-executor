@@ -34,7 +34,7 @@ The reader and executor run separately. Action and command queues each retain
 only their newest pending input, and command processing takes priority.
 
 ```text
-new chunk -> wait/align when target times are supplied -> PCHIP as needed
+new chunk -> scale point intervals -> wait/align when target times are supplied -> PCHIP as needed
           -> blend or switch -> optional low-pass -> split arms and send
 ```
 
@@ -65,7 +65,51 @@ not configuration.
 | `--one-euro-beta` / `ACTION_ONE_EURO_BETA` | `0` | Nonnegative, finite speed coefficient; zero means fixed-cutoff first-order smoothing. |
 | `--one-euro-d-cutoff-hz` / `ACTION_ONE_EURO_D_CUTOFF_HZ` | `1` | Positive, finite cutoff for the derivative estimate (Hz). |
 | `--control-hz` | `250` | Target output rate while a trajectory has pending points. |
+| `--time-scale` / `ACTION_TIME_SCALE` | `1.0` | Positive finite multiplier on policy-point intervals: `2` slows playback to about half speed; `0.5` doubles it. |
 | `--blend-duration-ms` / `ACTION_BLEND_DURATION_MS` | Unset | Blend full overlap; `0` disables blend. |
+
+### Action time scaling
+
+The executor uses `effective_interval = round(input_interval * time_scale)` in
+nanoseconds. At 30 Hz, `2.0` changes the point spacing from about 33.3 ms to
+66.7 ms; `0.5` changes it to about 16.7 ms. Original input target coordinates,
+including grippers, remain unchanged. A single-point chunk still emits immediately once.
+
+With `--upsample`, PCHIP samples the stretched/compressed trajectory on the same
+`--control-hz` grid; 250 Hz output does not become 125 Hz when scaling by two.
+Without upsampling, the output period itself becomes the scaled policy interval.
+The final control tick can round the duration up by less than one control period.
+Very short scaled intervals can place intermediate policy knots between output
+ticks; the output remains sampled at the configured control rate.
+Filters retain their configured control frequency. Model inference cadence,
+driver motion limits and a fixed `--blend-duration-ms` cap are unchanged; the
+default full-overlap blend uses the actual remaining trajectories.
+
+In a workspace experiment:
+
+```yaml
+launch:
+  env:
+    action_time_scale: '2.0' # Twice the playback duration; 1.0 restores normal speed.
+```
+
+CLI overrides the environment. Restart the executor/dataflow after editing the
+value; this option does not retime an already running process or active plan.
+Stop-and-go completion follows the last scaled command, so the next inference
+waits for that longer/shorter dispatch duration.
+
+For timestamped chunks, the **first supplied point's original target time** and
+`takeover_timestamp_ns` remain fixed. Only intervals after that first point are
+scaled. In particular, `action_origin_timestamp_ns + action_window_start *
+input_interval` is computed before scaling. Lateness limits remain wall-clock
+durations; expiry uses the scaled horizon, and late arrivals sample the scaled
+trajectory. The old adopted remainder is never scaled a second time during blend.
+Execution-plan feedback reports the actual post-resampling interval and positions.
+This preserves transport timing semantics; it does not retime the model's own
+action/video horizon or RTC prefix/ramp algorithm. RTC task quality under time
+scaling needs separate evaluation.
+
+### Filtering and blending
 
 `--no-filter-grippers` applies to all three filter modes. It bypasses final
 filtering for index 7 of each 8-value arm block (7 and 15 for bimanual input).
@@ -164,6 +208,14 @@ a count of mixed control points. Recorders must explicitly support
 `blend_duration_ns` to persist it; arbitrary input metadata is not forwarded.
 These fields describe published commands, not driver acceptance, actual motion,
 or complete historical blend weights.
+
+For non-unit time scaling, command metadata and execution-plan feedback also
+carry `action_time_scale`, `action_input_interval_ns`, and
+`action_effective_interval_ns`. The latter two describe policy-point spacing;
+the plan's `interval_ns` remains the actual control-point spacing. At scale 1.0
+these additional fields are omitted. Recorders with a fixed metadata whitelist
+need explicit support to persist them; workspace experiment archives retain the
+configured `action_time_scale` independently.
 
 ## Limitations
 

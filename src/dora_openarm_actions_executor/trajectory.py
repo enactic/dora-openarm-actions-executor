@@ -1,9 +1,34 @@
 """Common trajectory timing and handoff, independent of the policy algorithm."""
 
 from dataclasses import dataclass, replace
+import math
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
+
+
+def validate_time_scale(value):
+    """Return a positive finite duration multiplier."""
+    scale = float(value)
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("action time scale must be positive and finite")
+    return scale
+
+
+def scale_interval_ns(interval_ns, time_scale):
+    """Scale a policy interval once, rounding to integral nanoseconds."""
+    scale = validate_time_scale(time_scale)
+    if interval_ns <= 0:
+        raise ValueError("action interval must be positive")
+    if scale == 1.0:
+        return interval_ns
+    scaled = interval_ns * scale
+    if not math.isfinite(scaled) or scaled > np.iinfo(np.int64).max:
+        raise ValueError("scaled action interval exceeds int64 nanoseconds")
+    result = round(scaled)
+    if result < 1:
+        raise ValueError("scaled action interval rounds below one nanosecond")
+    return result
 
 
 def _upsample_trajectory(positions, interval_ns, step_interval_ns, offset_ns=0):
@@ -52,8 +77,8 @@ class Chunk:
     owner: object = None
 
     @classmethod
-    def from_event(cls, event):
-        """Read optional timing once; ordinary timestamps are not action targets."""
+    def from_event(cls, event, time_scale=1.0):
+        """Anchor the first supplied point, then scale only its following intervals."""
         value, metadata = event["value"], event["metadata"]
         interval = int(metadata["interval"])
         origin = metadata.get("action_origin_timestamp_ns")
@@ -62,9 +87,14 @@ class Chunk:
             if origin
             else int(metadata.get("takeover_timestamp_ns") or 0)
         )
+        # Window selection and takeover were decided upstream on wall time.
+        # Scaling origin/window_start would move that already committed anchor.
+        scaled_interval = scale_interval_ns(interval, time_scale)
+        if (len(value) - 1) * scaled_interval > np.iinfo(np.int64).max:
+            raise ValueError("scaled action horizon exceeds int64 nanoseconds")
         return cls(
             value.values.to_numpy().reshape(len(value), len(value[0])),
-            interval,
+            scaled_interval,
             first,
             metadata,
             int(metadata.get("takeover_timestamp_ns") or first),

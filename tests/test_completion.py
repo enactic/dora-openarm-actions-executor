@@ -53,7 +53,7 @@ def test_cancel_mid_chunk_does_not_report_completion(monkeypatch, command):
     assert len([v for v in outputs if v[0] == "move_position_right"]) == 1
 
 
-def run_executor(monkeypatch, *, points=3, upsample=False, mode="stop-and-go", expired=False, interrupt=None):
+def run_executor(monkeypatch, *, points=3, upsample=False, mode="stop-and-go", expired=False, interrupt=None, time_scale=1.0):
     now, outputs = [10_000_000_000], []
     metadata = dict(chunk_id="test-chunk", episode_attempt_id="test-attempt", interval=10_000_000)
     if mode == "stop-and-go":
@@ -91,5 +91,35 @@ def run_executor(monkeypatch, *, points=3, upsample=False, mode="stop-and-go", e
     monkeypatch.setattr(executor.asyncio, "sleep", sleep)
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(executor._main_executor(Node(), action_queue, command_queue, {"left", "right"},
-                                           upsample, False, 250, None, "switch"))
+                                           upsample, False, 250, None, "switch", time_scale=time_scale))
     return outputs
+
+
+@pytest.mark.parametrize("scale", [.5, 1., 2.])
+@pytest.mark.parametrize("upsample", [False, True])
+@pytest.mark.parametrize("mode", ["rtc", "stop-and-go"])
+def test_scaled_dispatch_completion_and_feedback_use_actual_time(monkeypatch, scale, upsample, mode):
+    outputs = run_executor(monkeypatch, upsample=upsample, mode=mode, time_scale=scale)
+    right = [(value[0]["qpos"], metadata) for name, value, metadata in outputs if name == "move_position_right"]
+    elapsed = right[-1][1]["timestamp"] - right[0][1]["timestamp"]
+    effective_interval = round(10_000_000 * scale)
+    period = 4_000_000 if upsample else effective_interval
+    expected_elapsed = ((2 * effective_interval + period - 1) // period) * period
+    assert elapsed == expected_elapsed
+    np.testing.assert_array_equal(right[0][0], [0] * 8)
+    np.testing.assert_array_equal(right[-1][0], [2] * 8)
+    plans = [values[0] for name, values, _ in outputs if name == "execution_plan"]
+    assert plans[0]["interval_ns"] == period
+    assert len(plans[0]["positions"]) == len(right)
+    for plan in plans:
+        if scale != 1:
+            assert plan["action_time_scale"] == scale
+            assert plan["action_input_interval_ns"] == 10_000_000
+            assert plan["action_effective_interval_ns"] == effective_interval
+    if scale != 1:
+        assert right[-1][1]["action_effective_interval_ns"] == effective_interval
+    else:
+        assert "action_time_scale" not in right[-1][1]
+    if mode == "stop-and-go":
+        assert [p["execution_status"] for p in plans] == ["adopted", "completed"]
+        assert plans[-1]["completed_timestamp_ns"] == right[-1][1]["timestamp"]

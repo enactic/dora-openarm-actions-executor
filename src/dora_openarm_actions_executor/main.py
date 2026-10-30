@@ -25,7 +25,7 @@ import numpy as np
 import pyarrow as pa
 from scipy.signal import sosfiltfilt
 
-from dora_openarm_actions_executor.trajectory import Chunk, TrajectoryScheduler
+from dora_openarm_actions_executor.trajectory import Chunk, TrajectoryScheduler, validate_time_scale
 
 QPOS_TYPE = pa.struct([("qpos", pa.list_(pa.float32()))])
 START_COMMANDS = {"start"}
@@ -210,7 +210,9 @@ async def _main_executor(
     one_euro_beta=0.0,
     one_euro_d_cutoff_hz=1.0,
     filter_grippers=True,
+    time_scale=1.0,
 ):
+    time_scale = validate_time_scale(time_scale)
     if not use_upsample and use_filter:
         print("Warning: filter requires upsample; disabling filter.", flush=True)
         use_filter = False
@@ -221,7 +223,7 @@ async def _main_executor(
         else f"filter_cutoff_hz={filter_cutoff_hz}, filter_q={filter_q}"
     )
     print(
-        f"actions-executor mode={mode}, blend_duration_ms={blend_duration_ms}, "
+        f"actions-executor mode={mode}, blend_duration_ms={blend_duration_ms}, time_scale={time_scale}, "
         f"filter={filter_mode if use_filter else 'off'}, "
         f"{filter_settings}, filter_grippers={filter_grippers}",
         flush=True,
@@ -299,7 +301,7 @@ async def _main_executor(
                 continue
             if not enabled:
                 continue
-            chunk = Chunk.from_event(event)
+            chunk = Chunk.from_event(event, time_scale=time_scale)
             reason = scheduler.submit(chunk)
             if reason:
                 reject(chunk, reason)
@@ -333,10 +335,16 @@ async def _main_executor(
                 or chunk.metadata.get("inference_mode") == "stop-and-go"
             )
             command_metadata = {}
+            if time_scale != 1.0:
+                command_metadata.update(
+                    action_time_scale=time_scale,
+                    action_input_interval_ns=int(chunk.metadata["interval"]),
+                    action_effective_interval_ns=chunk.interval_ns,
+                )
             chunk_id = chunk.metadata.get("chunk_id")
             if chunk_id is not None:
                 blend_ns = max(0, scheduler.blend_steps - 1) * step_ns
-                policy_interval = chunk.metadata["interval"]
+                policy_interval = chunk.interval_ns
                 command_metadata.update(
                     chunk_id=chunk_id,
                     blend_duration_ns=blend_ns,
@@ -361,6 +369,9 @@ async def _main_executor(
                     "interval_ns": active.interval_ns,
                     # RTC consumes pre-filter targets; filtering the prior again causes drift.
                     "positions": active.positions.tolist(),
+                    **{key: command_metadata[key] for key in (
+                        "action_time_scale", "action_input_interval_ns", "action_effective_interval_ns"
+                    ) if key in command_metadata},
                 }
                 feedback(active.metadata)
             position = active.positions[i_step]
@@ -434,6 +445,7 @@ async def _main_async(
     one_euro_beta=0.0,
     one_euro_d_cutoff_hz=1.0,
     filter_grippers=True,
+    time_scale=1.0,
 ):
     node = dora.Node()
     action_queue = asyncio.Queue(maxsize=1)
@@ -456,6 +468,7 @@ async def _main_async(
             one_euro_beta,
             one_euro_d_cutoff_hz,
             filter_grippers,
+            time_scale,
         )
     )
     dora_task = asyncio.create_task(
@@ -538,6 +551,12 @@ def main():
         help="motor control frequency (Hz)",
     )
     parser.add_argument(
+        "--time-scale",
+        type=_positive_float,
+        default=os.getenv("ACTION_TIME_SCALE", "1.0"),
+        help="multiply policy action intervals: 2 = half speed, 0.5 = double speed; output control rate stays fixed with --upsample",
+    )
+    parser.add_argument(
         "--blend-duration-ms",
         default=os.getenv("ACTION_BLEND_DURATION_MS"),
         type=_nonnegative_float,
@@ -572,6 +591,7 @@ def main():
             one_euro_beta=args.one_euro_beta,
             one_euro_d_cutoff_hz=args.one_euro_d_cutoff_hz,
             filter_grippers=args.filter_grippers,
+            time_scale=args.time_scale,
         )
     )
 
