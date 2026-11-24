@@ -26,6 +26,11 @@ import time
 QPOS_TYPE = pa.struct([("qpos", pa.list_(pa.float32()))])
 
 
+def _parse_arms(arms):
+    """Parse comma separated arms such as "right,left" and "right, left"."""
+    return [arm.strip() for arm in arms.split(",")]
+
+
 # Hermite cubic spline interpolation for upsampling
 class HermiteUpsampler:
     """Upsamples coarse trajectory chunks using cubic Hermite spline interpolation."""
@@ -300,8 +305,11 @@ def main():
     parser.add_argument(
         "--arms",
         default=os.getenv("ARMS", "right,left"),
-        help="The used arms: 'right,left' (default), 'right' or 'left'",
-        type=str,
+        help=(
+            "The used arms: 'right,left' (default), 'right' or 'left'. "
+            "Spaces around arms are ignored"
+        ),
+        type=_parse_arms,
     )
     parser.add_argument(
         "--upsample",
@@ -321,11 +329,10 @@ def main():
     )
 
     args = parser.parse_args()
-    arms = args.arms.split(",")
 
     asyncio.run(
         _main_async(
-            arms,
+            args.arms,
             use_upsample=args.upsample,
             use_filter=args.filter,
             control_hz=args.control_hz,
