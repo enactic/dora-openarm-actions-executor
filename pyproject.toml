@@ -29,6 +29,13 @@ dev = [
   "ruff == 0.14.11", # sync with .pre-commit-config.yaml
 ]
 
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [project.scripts]
 dora-openarm-actions-executor = "dora_openarm_actions_executor.main:main"
 
